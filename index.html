@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<title>Cerca</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+<style>
+  :root { color-scheme: dark; --bg:#0b1220; --surface:#131c2e; --text:#e2e8f0; box-sizing:border-box;
+    padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  html { scroll-padding-top: env(safe-area-inset-top, 0px); height:100%; }
+  body { margin:0; min-height:100%; background:var(--bg); color:var(--text); font-family:'Figtree',system-ui,-apple-system,'Segoe UI',sans-serif; -webkit-tap-highlight-color:transparent; }
+  @keyframes ring { 0%{transform:scale(.3);opacity:.7} 100%{transform:scale(3.2);opacity:0} }
+  @keyframes pop { 0%{transform:scale(.4);opacity:0} 60%{transform:scale(1.12)} 100%{transform:scale(1);opacity:1} }
+  @keyframes draw { to { stroke-dashoffset:0 } }
+  @keyframes pulseRed { 0%,100%{box-shadow:0 0 0 0 rgba(244,63,94,.45)} 50%{box-shadow:0 0 0 8px rgba(244,63,94,0)} }
+  @keyframes sheet { from{transform:translateY(100%)} to{transform:translateY(0)} }
+  @keyframes fade { from{opacity:0} to{opacity:1} }
+  .ring { animation: ring 1.4s ease-out infinite; }
+  .pop { animation: pop .5s cubic-bezier(.2,.9,.3,1.2) both; }
+  .draw { stroke-dasharray: 60; stroke-dashoffset: 60; animation: draw .5s .25s ease-out forwards; }
+  .pulse-red { animation: pulseRed 1.8s infinite; }
+  .sheet { animation: sheet .28s ease-out; }
+  .fade { animation: fade .2s ease-out; }
+  @media (prefers-reduced-motion: reduce) { .ring,.pulse-red{animation:none} .pop,.sheet,.fade{animation-duration:.01s} }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('cerca:' + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem('cerca:' + k, JSON.stringify(v)); } catch (e) {} }
+};
+const fmt = ms => { const s = Math.ceil(ms / 1000); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return (h ? h + ' h ' : '') + m + ' min ' + x + ' s'; };
+const hora = () => new Date().toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+const TONES = {
+  green: { border: 'border-l-emerald-400', badge: 'bg-emerald-400/15 text-emerald-300 ring-emerald-400/30', avatar: 'bg-emerald-400/15 text-emerald-300' },
+  blue:  { border: 'border-l-sky-400',     badge: 'bg-sky-400/15 text-sky-300 ring-sky-400/30',             avatar: 'bg-sky-400/15 text-sky-300' },
+  red:   { border: 'border-l-rose-500',    badge: 'bg-rose-500 text-white ring-rose-400/60 pulse-red',      avatar: 'bg-rose-500/15 text-rose-300' },
+  gray:  { border: 'border-l-slate-500',   badge: 'bg-slate-500/15 text-slate-300 ring-slate-500/30',       avatar: 'bg-slate-500/15 text-slate-300' },
+};
+
+const HIST = {
+  camila: [
+    { p: 'Casa', t: '06:25', k: 'area' },
+    { p: 'En camino', t: '06:40', k: 'area' },
+    { p: 'Universidad', t: '07:02', k: 'ok', note: 'Llegada confirmada' },
+  ],
+  papa: [
+    { p: 'Zona protegida', t: '08:00', k: 'priv' },
+    { p: 'Zona protegida', t: '13:30', k: 'priv' },
+  ],
+  mateo: [
+    { p: 'Colegio', t: '15:10', k: 'ok', note: 'Salida confirmada' },
+    { p: 'Casa', t: '16:05', k: 'area' },
+    { p: 'Sin actividad del teléfono', t: '17:40', k: 'warn' },
+  ],
+};
+
+function Detail({ m, tab0, hours, emergency, onAlert }) {
+  const [tab, setTab] = useState(tab0);
+  const [sim, setSim] = useState(-1);
+  const steps = [
+    ['Detecta algo inusual', 'Sin actividad del teléfono por ' + hours + ' h en un horario en que suele estar activo.'],
+    ['Le pregunta a ' + m.name, 'Llega una notificación para confirmar que está bien con un toque. Espera 10 min.'],
+    ['Avisa a tu círculo', 'Si no responde, tú y los demás protegidos reciben la alerta.'],
+    ['Contacto de emergencia', emergency ? 'Se comparte su último lugar conocido, solo en este momento.' : 'Se avisa sin compartir ubicación (esa opción está apagada).'],
+  ];
+  const run = () => { setSim(0); for (let i = 1; i <= 4; i++) setTimeout(() => setSim(i), i * 1300); };
+  const dot = { ok: 'bg-emerald-400', area: 'bg-sky-400', priv: 'bg-slate-400', warn: 'bg-rose-500' };
+  const tag = { ok: 'Confirmado', area: 'Zona aproximada', priv: 'Zona privada · solo confirmamos que está a salvo', warn: 'Alerta' };
+  return (
+    <div>
+      <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl bg-slate-800 p-1 text-sm font-bold">
+        {[['lugares', 'Últimos lugares'], ['mal', 'Si algo sale mal']].map(([k, l]) => (
+          <button key={k} onClick={() => setTab(k)} className={'rounded-lg py-2 ' + (tab === k ? 'bg-slate-600 text-white' : 'text-slate-400')}>{l}</button>
+        ))}
+      </div>
+      {tab === 'lugares' ? (
+        <div>
+          <p className="mb-4 text-sm text-slate-400">Solo lugares ya confirmados, nunca en tiempo real ni con coordenadas exactas.</p>
+          <ol className="relative ml-2 border-l border-slate-700">
+            {HIST[m.id].map((h, i) => (
+              <li key={i} className="relative mb-5 ml-5">
+                <span className={'absolute -left-[26px] top-1.5 h-3 w-3 rounded-full ring-4 ring-slate-900 ' + dot[h.k]} />
+                <div className="flex items-baseline justify-between gap-3">
+                  <p className="font-bold">{h.k === 'priv' ? '🔒 ' : ''}{h.p}</p>
+                  <span className="text-sm font-semibold text-slate-400">{h.t}</span>
+                </div>
+                <p className="text-xs text-slate-400">{h.note || tag[h.k]}</p>
+              </li>
+            ))}
+          </ol>
+          {m.tone === 'red' && <button onClick={onAlert} className="w-full rounded-xl bg-rose-500 py-3.5 font-extrabold text-white">Ver alerta activa</button>}
+        </div>
+      ) : (
+        <div>
+          <p className="mb-4 text-sm text-slate-400">Cerca escala poco a poco y nunca persigue: cada paso espera una respuesta antes de pasar al siguiente.</p>
+          <ol className="mb-4 flex flex-col gap-2">
+            {steps.map(([t, d], i) => {
+              const done = sim > i, act = sim === i;
+              return (
+                <li key={i} className={'flex gap-3 rounded-xl border p-3 transition-colors ' + (done ? 'border-emerald-400/40 bg-emerald-400/10' : act ? 'border-amber-300/60 bg-amber-300/10' : 'border-slate-700 bg-slate-800/50')}>
+                  <span className={'grid h-7 w-7 shrink-0 place-items-center rounded-full text-sm font-extrabold ' + (done ? 'bg-emerald-400 text-slate-900' : act ? 'bg-amber-300 text-slate-900' : 'bg-slate-700 text-slate-300')}>{done ? '✓' : i + 1}</span>
+                  <div><p className="font-bold">{t}</p><p className="text-sm text-slate-400">{d}</p></div>
+                </li>
+              );
+            })}
+          </ol>
+          <button onClick={run} disabled={sim >= 0 && sim < 4} className="w-full rounded-xl bg-emerald-400 py-3.5 font-extrabold text-slate-900 disabled:opacity-60">{sim < 0 ? 'Simular un incidente' : sim < 4 ? 'Simulando…' : 'Simular de nuevo'}</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Toggle({ on, onChange, label }) {
+  return (
+    <button role="switch" aria-checked={on} aria-label={label} onClick={() => onChange(!on)}
+      className={'relative h-7 w-12 shrink-0 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ' + (on ? 'bg-emerald-500' : 'bg-slate-600')}>
+      <span className={'absolute top-0.5 h-6 w-6 rounded-full bg-white transition-all ' + (on ? 'left-[22px]' : 'left-0.5')} />
+    </button>
+  );
+}
+
+function Sheet({ title, onClose, children }) {
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center fade" role="dialog" aria-modal="true" aria-label={title}>
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="sheet relative w-full max-w-md rounded-t-3xl border border-slate-700/60 bg-slate-900 p-5 max-h-[88%] overflow-y-auto"
+           style={{ paddingBottom: 'calc(1.25rem + env(safe-area-inset-bottom, 0px))' }}>
+        <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-slate-600" />
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-bold">{title}</h2>
+          <button onClick={onClose} aria-label="Cerrar" className="grid h-9 w-9 place-items-center rounded-full bg-slate-800 text-slate-300">✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Card({ m, onClick }) {
+  const t = TONES[m.tone];
+  return (
+    <button onClick={onClick} className={'flex w-full items-center gap-3 rounded-2xl border border-slate-800 border-l-4 bg-[#131c2e] p-4 text-left transition active:scale-[.985] focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ' + t.border}>
+      <div className={'grid h-12 w-12 shrink-0 place-items-center rounded-full text-xl ' + t.avatar}>{m.emoji}</div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[17px] font-bold leading-tight">{m.name} <span className="font-medium text-slate-400">({m.rel})</span></p>
+        <p className="mt-0.5 text-sm text-slate-400">{m.sub}</p>
+      </div>
+      <span className={'shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ring-1 ' + t.badge}>{m.badge}</span>
+    </button>
+  );
+}
+
+function App() {
+  const [mateoResuelto, setMateoResuelto] = useState(null);
+  const [alertOpen, setAlertOpen] = useState(false);
+  const [privOpen, setPrivOpen] = useState(false);
+  const [passive, setPassive] = useState(() => store.get('passive', true));
+  const [hours, setHours] = useState(() => store.get('hours', 4));
+  const [zones, setZones] = useState(() => store.get('zones', ['Casa de Papá', 'Consultorio médico']));
+  const [newZone, setNewZone] = useState('');
+  const [detail, setDetail] = useState(null);
+  const [timer, setTimer] = useState(() => store.get('timer', null));
+  const [now, setNow] = useState(Date.now());
+  const [due, setDue] = useState(false);
+  const [escalated, setEscalated] = useState(false);
+  useEffect(() => store.set('timer', timer), [timer]);
+  useEffect(() => { const id = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(id); }, []);
+  useEffect(() => {
+    if (timer && now >= timer.end && !due) {
+      setDue(true);
+      try { if (window.Notification && Notification.permission === 'granted') new Notification('Cerca: ¿todo bien?', { body: 'Pasó el tiempo que elegiste. Confirma que estás a salvo.' }); } catch (e) {}
+      try { navigator.vibrate && navigator.vibrate([300, 150, 300]); } catch (e) {}
+    }
+  }, [now, timer, due]);
+  useEffect(() => { if (!due) return; const id = setTimeout(() => setEscalated(true), 60000); return () => clearTimeout(id); }, [due]);
+  function startTimer(h, ms) {
+    try { if (window.Notification && Notification.permission === 'default') Notification.requestPermission(); } catch (e) {}
+    setDue(false); setEscalated(false); setTimer({ end: Date.now() + ms, h });
+  }
+  const left = timer ? Math.max(0, timer.end - now) : 0;
+  const [emergency, setEmergency] = useState(() => store.get('emergency', true));
+  const [battery, setBattery] = useState(() => store.get('battery', false));
+  useEffect(() => store.set('emergency', emergency), [emergency]);
+  useEffect(() => store.set('battery', battery), [battery]);
+  const [checkin, setCheckin] = useState('idle'); // idle | sending | done
+  const [sentAt, setSentAt] = useState(null);
+  const [toast, setToast] = useState('');
+
+  useEffect(() => store.set('passive', passive), [passive]);
+  useEffect(() => store.set('hours', hours), [hours]);
+  useEffect(() => store.set('zones', zones), [zones]);
+  useEffect(() => { if (toast) { const id = setTimeout(() => setToast(''), 2600); return () => clearTimeout(id); } }, [toast]);
+
+  const mateo = mateoResuelto
+    ? { tone: 'green', sub: 'Confirmó que está bien', badge: 'Resuelto · ' + mateoResuelto }
+    : passive
+      ? { tone: 'red', sub: 'Inactividad inusual detectada', badge: '¡Alerta automática!' }
+      : { tone: 'gray', sub: 'Monitoreo pasivo desactivado', badge: 'Sin vigilancia' };
+
+  const members = [
+    { id: 'camila', name: 'Camila', rel: 'Hija', emoji: '🎓', tone: 'green', sub: 'Universidad · confirmada', badge: 'Llegó bien · 07:02' },
+    { id: 'papa', name: 'Papá', rel: 'Adulto mayor', emoji: '🏡', tone: 'blue', sub: 'Zona protegida', badge: 'Privacidad activa' },
+    { id: 'mateo', name: 'Mateo', rel: 'Hijo', emoji: '🎮', ...mateo },
+  ];
+  const alerts = members.filter(m => m.tone === 'red').length;
+
+  function doCheckin() {
+    if (checkin === 'sending') return;
+    setCheckin('sending');
+    setTimeout(() => { setSentAt(hora()); setCheckin('done'); }, 1500);
+    setTimeout(() => setCheckin(s => (s === 'done' ? 'idle' : s)), 3300);
+  }
+  function addZone(e) {
+    e.preventDefault();
+    const z = newZone.trim();
+    if (z && !zones.includes(z)) setZones([...zones, z]);
+    setNewZone('');
+  }
+
+  return (
+    <div className="mx-auto flex min-h-screen w-full max-w-md flex-col px-4 pt-6">
+      <header className="mb-5">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-emerald-300">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></svg>
+            <span className="text-lg font-extrabold tracking-tight">Cerca</span>
+          </div>
+          <button onClick={() => setPrivOpen(true)} aria-label="Privacidad" className="flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-800/70 px-3 py-1.5 text-sm font-semibold text-slate-200">
+            <span>🛡️</span> Privacidad
+          </button>
+        </div>
+        <div className="flex items-end justify-between gap-3">
+          <h1 className="text-[28px] font-extrabold leading-[1.1] tracking-tight">Mi círculo de confianza</h1>
+          <span className="mb-1 shrink-0 rounded-full bg-slate-800 px-3 py-1 text-xs font-bold text-slate-300 ring-1 ring-slate-700">{members.length} protegidos</span>
+        </div>
+        <p className="mt-2 text-sm text-slate-400">
+          {alerts > 0 ? 'Hay ' + alerts + ' alerta que requiere tu atención.' : 'Todo en calma. Sin mapas, sin persecución.'}
+        </p>
+      </header>
+
+      {checkin === 'done' || sentAt ? (
+        <div className="mb-4 flex items-center gap-3 rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm">
+          <span className="grid h-7 w-7 place-items-center rounded-full bg-emerald-400 text-slate-900 font-bold">✓</span>
+          <p className="text-emerald-100">Tu círculo sabe que llegaste a salvo <span className="font-bold">· {sentAt}</span></p>
+        </div>
+      ) : null}
+
+      <main className="flex flex-col gap-3 pb-36">
+        {members.map(m => (
+          <Card key={m.id} m={m} onClick={() => setDetail({ id: m.id, tab: 'lugares' })} />
+        ))}
+        <div className="rounded-2xl border border-slate-800 bg-[#131c2e] p-4">
+          <p className="font-bold">Avísame si no confirmo</p>
+          <p className="mb-3 mt-0.5 text-sm text-slate-400">{timer && !due ? 'Te preguntaré si estás bien en ' + fmt(left) : 'Elige en cuánto tiempo te pregunto si estás bien.'}</p>
+          <div className="flex flex-wrap gap-2">
+            {[1, 2, 3, 4].map(h => <button key={h} onClick={() => startTimer(h, h * 3600000)} className={'rounded-full px-4 py-2 text-sm font-bold ' + (timer && timer.h === h ? 'bg-emerald-400 text-slate-900' : 'bg-slate-700 text-slate-200')}>{h} h</button>)}
+            <button onClick={() => startTimer(0, 10000)} className="rounded-full bg-slate-800 px-4 py-2 text-sm font-bold text-slate-300 ring-1 ring-slate-700">Probar 10 s</button>
+            {timer && <button onClick={() => { setTimer(null); setDue(false); }} className="px-3 py-2 text-sm font-bold text-rose-300">Cancelar</button>}
+          </div>
+        </div>
+        <button onClick={() => setDetail({ id: 'mateo', tab: 'mal' })} className="mt-1 flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3.5 text-left">
+          <span><span className="block font-bold">¿Qué pasa si algo sale mal?</span><span className="text-sm text-slate-400">Mira cómo reacciona Cerca, paso a paso.</span></span>
+          <span className="text-xl text-slate-500">›</span>
+        </button>
+        <p className="mt-2 px-2 text-center text-xs leading-relaxed text-slate-500">Cerca nunca muestra la ubicación exacta. Solo avisa cuando algo se sale de lo habitual.</p>
+      </main>
+
+      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-30 flex justify-center bg-gradient-to-t from-[#0b1220] via-[#0b1220]/90 to-transparent px-4 pt-8"
+           style={{ paddingBottom: 'calc(1rem + env(safe-area-inset-bottom, 0px))' }}>
+        <button onClick={doCheckin} disabled={checkin === 'sending'}
+          className="pointer-events-auto flex w-full max-w-md items-center justify-center gap-2 rounded-2xl bg-emerald-400 px-5 py-4 text-base font-extrabold text-slate-900 shadow-lg shadow-emerald-500/25 transition active:scale-[.98] disabled:opacity-80 focus:outline-none focus-visible:ring-4 focus-visible:ring-emerald-200/50">
+          {checkin === 'sending' ? 'Avisando a tu círculo…' : 'Notificar: Llegué a salvo'}
+        </button>
+      </div>
+
+      {checkin !== 'idle' && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-[#0b1220]/90 fade">
+          <div className="relative grid h-40 w-40 place-items-center">
+            {checkin === 'sending' && <>
+              <span className="ring absolute h-24 w-24 rounded-full border-2 border-emerald-400" />
+              <span className="ring absolute h-24 w-24 rounded-full border-2 border-emerald-400" style={{ animationDelay: '.45s' }} />
+            </>}
+            <div className={'grid h-24 w-24 place-items-center rounded-full ' + (checkin === 'done' ? 'bg-emerald-400 pop' : 'bg-emerald-400/20')}>
+              {checkin === 'done'
+                ? <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#0f172a" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path className="draw" d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+                : <span className="text-3xl">📡</span>}
+            </div>
+          </div>
+          <div className="absolute bottom-[28%] px-8 text-center">
+            <p className="text-xl font-extrabold">{checkin === 'done' ? '¡Listo! Estás a salvo' : 'Enviando…'}</p>
+            <p className="mt-1 text-sm text-slate-400">{checkin === 'done' ? 'Camila, Papá y Mateo fueron notificados · ' + sentAt : 'Sin compartir tu ubicación'}</p>
+          </div>
+        </div>
+      )}
+
+      {due && (
+        <div className="fade fixed inset-0 z-[70] grid place-items-center bg-[#0b1220]/95 px-6">
+          <div className="w-full max-w-sm text-center">
+            <div className="pulse-red mx-auto mb-5 grid h-20 w-20 place-items-center rounded-full bg-amber-300/20 text-4xl">🔔</div>
+            <h2 className="text-2xl font-extrabold">¿Todo bien?</h2>
+            <p className="mt-2 text-slate-300">{escalated ? 'No respondiste a tiempo. Ya avisamos a tu círculo de confianza.' : 'Pasó el tiempo que elegiste. Confirma con un toque; si no respondes en 1 min, avisamos a tu círculo.'}</p>
+            <button onClick={() => { setTimer(null); setDue(false); setEscalated(false); setSentAt(hora()); setToast('Confirmado. Tu círculo sabe que estás bien.'); }} className="mt-6 w-full rounded-2xl bg-emerald-400 py-4 font-extrabold text-slate-900">Estoy bien</button>
+            <button onClick={() => setEscalated(true)} className="mt-2 w-full rounded-2xl bg-slate-800 py-3.5 font-bold text-rose-300 ring-1 ring-slate-700">Necesito ayuda</button>
+          </div>
+        </div>
+      )}
+
+      {detail && (() => {
+        const m = members.find(x => x.id === detail.id);
+        return (
+          <Sheet title={m.name + ' · ' + m.rel} onClose={() => setDetail(null)}>
+            <Detail key={detail.id + detail.tab} m={m} tab0={detail.tab} hours={hours} emergency={emergency} onAlert={() => { setDetail(null); setAlertOpen(true); }} />
+          </Sheet>
+        );
+      })()}
+
+      {alertOpen && (
+        <Sheet title="Alerta automática" onClose={() => setAlertOpen(false)}>
+          <div className="mb-4 flex items-start gap-3 rounded-2xl border border-rose-500/40 bg-rose-500/10 p-4">
+            <span className="text-2xl">⚠️</span>
+            <div>
+              <p className="font-bold">Mateo no muestra actividad</p>
+              <p className="mt-1 text-sm text-slate-300">Su teléfono lleva {hours} h 12 min sin movimiento, algo inusual para este horario. No compartimos su ubicación.</p>
+            </div>
+          </div>
+          <div className="flex flex-col gap-2">
+            <button onClick={() => { setAlertOpen(false); setToast('Pedimos a Mateo que confirme que está bien.'); }} className="rounded-xl bg-slate-800 py-3.5 font-bold ring-1 ring-slate-700">Pedirle que confirme</button>
+            <button onClick={() => { setMateoResuelto(hora()); setAlertOpen(false); setToast('Alerta resuelta.'); }} className="rounded-xl bg-emerald-400 py-3.5 font-extrabold text-slate-900">Marcar como resuelta</button>
+          </div>
+        </Sheet>
+      )}
+
+      {privOpen && (
+        <Sheet title="Privacidad" onClose={() => setPrivOpen(false)}>
+          <section className="mb-6">
+            <div className="flex items-center justify-between gap-4 rounded-2xl bg-slate-800/70 p-4 ring-1 ring-slate-700">
+              <div>
+                <p className="font-bold">Monitoreo pasivo por inactividad</p>
+                <p className="mt-0.5 text-sm text-slate-400">Avisa solo si no hay actividad inusual del teléfono. Sin rastreo GPS continuo.</p>
+              </div>
+              <Toggle on={passive} onChange={(v) => { setPassive(v); if (v) setMateoResuelto(null); }} label="Monitoreo pasivo" />
+            </div>
+            {passive && (
+              <div className="mt-3 flex items-center justify-between rounded-2xl bg-slate-800/40 px-4 py-3 text-sm">
+                <span className="text-slate-300">Avisar tras</span>
+                <div className="flex gap-1.5">
+                  {[2, 4, 6].map(h => (
+                    <button key={h} onClick={() => setHours(h)} className={'rounded-full px-3 py-1.5 font-bold ' + (hours === h ? 'bg-emerald-400 text-slate-900' : 'bg-slate-700 text-slate-200')}>{h} h</button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+
+          <section>
+            <div className="mb-6 flex flex-col gap-2">
+              <div className="flex items-center justify-between gap-4 rounded-2xl bg-slate-800/70 p-4 ring-1 ring-slate-700">
+                <div><p className="font-bold">Último lugar solo en emergencia</p><p className="mt-0.5 text-sm text-slate-400">Si una alerta no se resuelve, se comparte el último lugar conocido con tu contacto de emergencia.</p></div>
+                <Toggle on={emergency} onChange={setEmergency} label="Último lugar en emergencia" />
+              </div>
+              <div className="flex items-center justify-between gap-4 rounded-2xl bg-slate-800/70 p-4 ring-1 ring-slate-700">
+                <div><p className="font-bold">Ahorro de batería</p><p className="mt-0.5 text-sm text-slate-400">Revisa la actividad cada 30 min en lugar de cada 5.</p></div>
+                <Toggle on={battery} onChange={setBattery} label="Ahorro de batería" />
+              </div>
+            </div>
+            <h3 className="font-bold">Zonas privadas</h3>
+            <p className="mb-3 mt-0.5 text-sm text-slate-400">En estos lugares ocultamos la ubicación exacta y solo confirmamos que la persona está a salvo.</p>
+            <ul className="mb-3 flex flex-col gap-2">
+              {zones.length === 0 && <li className="rounded-xl border border-dashed border-slate-700 p-4 text-center text-sm text-slate-500">Aún no hay zonas. Agrega la primera abajo.</li>}
+              {zones.map(z => (
+                <li key={z} className="flex items-center justify-between rounded-xl bg-slate-800/70 px-4 py-3 ring-1 ring-slate-700">
+                  <span className="flex items-center gap-2 text-sm font-semibold"><span className="text-sky-300">🔒</span>{z}</span>
+                  <button onClick={() => setZones(zones.filter(x => x !== z))} aria-label={'Quitar ' + z} className="text-sm font-semibold text-rose-300">Quitar</button>
+                </li>
+              ))}
+            </ul>
+            <div className="flex gap-2">
+              <input value={newZone} onChange={e => setNewZone(e.target.value)} onKeyDown={e => e.key === 'Enter' && addZone(e)} placeholder="Ej. Casa de la abuela"
+                className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-[16px] placeholder-slate-500 focus:border-emerald-400 focus:outline-none" />
+              <button onClick={addZone} className="rounded-xl bg-emerald-400 px-4 font-extrabold text-slate-900">Agregar</button>
+            </div>
+          </section>
+        </Sheet>
+      )}
+
+      {toast && (
+        <div className="fade fixed left-1/2 top-4 z-[60] w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 rounded-xl bg-slate-100 px-4 py-3 text-center text-sm font-semibold text-slate-900 shadow-xl"
+             style={{ marginTop: 'env(safe-area-inset-top, 0px)' }}>{toast}</div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
